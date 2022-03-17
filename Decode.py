@@ -2,17 +2,55 @@ import numpy as np
 import scipy.signal as sig
 import scipy.io.wavfile as wf
 import matplotlib.pyplot as plt
+import getopt,sys
+
+dataFile = ''
+outputfile = ''
+# offset frequency in Hz (read from the previous plot)
+offset_frequency = 0
+
+# limit the sampling rate using decimation, let's use the decimation by 4
+bb_dec_factor = 300
+
+# bitrate assumption, will be corrected for using early-late symbol sync (as
+# read from the spectral content plot from above)
+bit_rate = 1250
+
+helpstring = '''
+Decode.py -i <data file> -o <demodulated file> -d <decimation amount> -b <bitrate> -f <offset frequency>
+'''
+
+try:
+    opts, args = getopt.getopt(sys.argv[1:],"hi:o:d:f:",[])
+except getopt.GetoptError:
+    print(helpstring)
+    exit(2)
+for opt, arg in opts:
+    if opt == '-h':
+        print(helpstring)
+        exit()
+    elif opt in ("-i"):
+        dataFile = arg
+    elif opt in ("-o"):
+        outputfile = arg
+    elif opt in ("-d"):
+        bb_dec_factor = int(arg)
+    elif opt in ("-b"):
+        bit_rate = int(arg)
+    elif opt in ("-f"):
+        offset_frequency = float(arg)
 
 #
 # DATA LOAD
 #
 
 # read the wave file
-fs, rf = wf.read('data.wav')
+fs, rf = wf.read(dataFile)
 # get the scale factor according to the data type
 sf = {
     np.dtype('int16'): 2**15,
     np.dtype('int32'): 2**32,
+    np.dtype('float32'): 1,
 }[rf.dtype]
 
 # convert to complex number c = in_phase + j*quadrature and scale so that we are
@@ -29,8 +67,6 @@ plt.psd(rf, Fs=fs)
 # MIX TO BASEBAND
 #
 
-# offset frequency in Hz (read from the previous plot)
-offset_frequency = 366.8e3
 # baseband local oscillator
 bb_lo = np.exp(1j * (2 * np.pi * (-offset_frequency / fs) *
                       np.arange(0, len(rf))))
@@ -50,8 +86,6 @@ plt.psd(bb, Fs=fs)
 # DECIMATE
 #
 
-# limit the sampling rate using decimation, let's use the decimation by 4
-bb_dec_factor = 4
 # get the baseband sampling frequency
 bb_fs = fs // bb_dec_factor
 # let's prepare the low pass decimation filter that will have a cutoff at the
@@ -83,7 +117,7 @@ plt.plot(np.arange(0, len(bb)) / bb_fs, np.abs(bb))
 # place
 bb_mag = np.abs(bb)
 # mag threshold level (as read from the chart above)
-bb_mag_thrs = 0.01
+bb_mag_thrs = 0.02
 
 # indices with magnitude higher than threshold
 bb_indices = np.nonzero(bb_mag > bb_mag_thrs)[0]
@@ -96,7 +130,6 @@ plt.title('Selected Signal')
 plt.xlabel('Time [s]')
 plt.ylabel('Magnitude')
 plt.plot(np.arange(0, len(bb)) / bb_fs, np.abs(bb))
-
 
 #
 # DEMODULATION
@@ -119,10 +152,6 @@ plt.subplot(3, 3, 6)
 plt.title('Demodulated Signal Spectrum,')
 plt.psd(dem, Fs=bb_fs)
 
-# bitrate assumption, will be corrected for using early-late symbol sync (as
-# read from the spectral content plot from above)
-bit_rate = 100e3
-
 # show the demodulated data in time domain
 plt.subplot(3, 3, 7)
 plt.title('Demodulated Signal,')
@@ -130,6 +159,9 @@ plt.xlabel('Time [s]')
 plt.ylabel('Value')
 plt.plot(np.arange(0, len(dem)) / bb_fs, dem)
 
+
+if outputfile != '':
+    wf.write(outputfile, bb_fs, dem)
 
 #
 # SIGNAL SYNCHRONIZATION (DATA RECOVERY)
@@ -215,10 +247,34 @@ plt.subplot(3, 3, 9)
 plt.title('Data,')
 plt.xlabel('Bit Number')
 plt.ylabel('Value')
-plt.plot([x[1] >= 0 for x in el_samples])
+
+bits = (np.array([x[1] for x in el_samples]) >= .00 *1).astype(int)
+
+last = 0
+data = []
+found_start = False
+found_end = False
+for x in bits:
+    if found_start and found_end:
+        data.append(x)
+    last = last << 1
+    last = last + x
+    last = last & 0xff
+    if(last == 0b10101010) and not found_start:
+        found_start = True
+        print("found start!")
+    if found_start and (last != 0b10101010 and last != 0b1010101):
+        found_end = True
+bits = np.array(data)
+bits = (bits[1:] - bits[0:-1]) % 2
+bits = bits.astype(np.uint8)
+
+plt.plot(bits)
+# plt.plot([x[1] >= 0 for x in el_samples])
 
 # finally, let's output the bit stream
-print(np.array([x[1] for x in el_samples]) >= 0)
+print(bits)
+print(len(bits))
 
 # show all plots
 plt.show()
