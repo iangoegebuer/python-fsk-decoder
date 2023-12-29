@@ -82,6 +82,9 @@ audio_indices = np.nonzero(audio_mag > data_start_threshold)[0]
 # limit the signal
 audio = rf[np.min(audio_indices) : np.max(audio_indices)]
 
+if len(audio[0]) != 1:
+    audio = audio[:,0]
+
 audio_mag = np.abs(audio)
 # Again, use the max of the first quarter of data to find the end (noise)
 data_end_threshold = np.max(audio_mag[:round(len(audio_mag)/4)])*1.05
